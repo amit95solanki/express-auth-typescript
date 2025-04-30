@@ -1,0 +1,13 @@
+<% 
+// Check if message is defined using proper JavaScript syntax
+if (typeof message !== "undefined") { 
+%>
+  <div class="verification-message">
+    <h2><%= message %></h2>
+  </div>
+<% } else { %>
+  <div class="verification-message">
+    <h2>Email verification in progress</h2>
+    <p>Please wait while we verify your email address.</p>
+  </div>
+<% } %>
