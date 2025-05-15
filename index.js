@@ -4,7 +4,7 @@ import dotenv from "dotenv";
 import cors from "cors";
 import userRoute from "./routes/userRoute.js";
 import authRoute from "./routes/authRoute.js";
-
+import blogRoute from "./routes/blogRoute.js";
 dotenv.config();
 const app = express();
 
@@ -21,6 +21,9 @@ app.use(
 // Middleware setup
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Serve uploaded images statically
+app.use("/uploads", express.static("uploads"));
 
 // View engine setup
 app.set("view engine", "ejs");
@@ -39,6 +42,7 @@ const connectDb = async () => {
 
 const port = process.env.PORT || 3000;
 app.use("/api", userRoute);
+app.use("/blog", blogRoute);
 app.use("/", authRoute);
 app.listen(port, () => {
   console.log(`Server is running on http://localhost:${port}`);
