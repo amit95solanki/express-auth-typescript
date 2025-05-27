@@ -8,6 +8,10 @@ import randomstring from "randomstring";
 import jwt from "jsonwebtoken";
 import { deleteImage } from "../helpers/deletefile.js";
 import path from "path";
+import { Permission } from "../models/permission.js";
+import { UserPermission } from "../models/userPermission.js";
+import { getUserPermissionHelper } from "../helpers/getUserPermissionHelper.js";
+import mongoose from "mongoose";
 export const userRegister = async (req, res) => {
   try {
     const error = validationResult(req);
@@ -32,6 +36,26 @@ export const userRegister = async (req, res) => {
       image: req.file ? "image/" + req.file.path : "",
     });
     await user.save();
+
+    const defaultPermission = await Permission.find({ is_default: 1 });
+    console.log("defaultPermission", defaultPermission);
+
+    if (defaultPermission.length > 0) {
+      let permissionArray = [];
+      defaultPermission.forEach((permission) => {
+        permissionArray.push({
+          permission_name: permission.permission_name,
+          permission_value: [0, 1, 2, 3],
+        });
+      });
+      const UserPermissions = new UserPermission({
+        user_id: user._id,
+        permission: permissionArray,
+      });
+
+      await UserPermissions.save();
+      console.log("UserPermissions", UserPermissions);
+    }
     const msg = `<p>Congratulations! ${name} You have successfully registered!</p>`;
     return res.status(201).json({ message: "User registered successfully" });
   } catch (err) {
@@ -166,7 +190,7 @@ export const updatePassword = async (req, res) => {
 };
 const generateAccessToken = (user) => {
   return jwt.sign({ user }, process.env.ACCESS_TOKEN_SECRET, {
-    expiresIn: "600s",
+    expiresIn: "1h",
   });
 };
 
@@ -200,12 +224,51 @@ export const userLogin = async (req, res) => {
     }
     const accessToken = generateAccessToken(userData);
     const refreshToken = generateRefreshToken(userData);
+
+    const result = await User.aggregate([
+      {
+        $match: { email: userData.email },
+      },
+      {
+        $lookup: {
+          from: "userpermissions",
+          localField: "_id",
+          foreignField: "user_id",
+          as: "permissions",
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          name: 1,
+          email: 1,
+          mobile: 1,
+          countryCode: 1,
+          image: 1,
+          is_verified: 1,
+          permissions: {
+            $cond: {
+              if: { $isArray: "$permissions" },
+              then: { $arrayElemAt: ["$permissions", 0] },
+              else: [null],
+            },
+          },
+        },
+      },
+      {
+        $addFields: {
+          permissions: {
+            permission: "$permissions.permission",
+          },
+        },
+      },
+    ]);
     return res.status(200).json({
       success: true,
       msg: "Login successfully",
       accessToken: accessToken,
       refreshToken: refreshToken,
-
+      data: result,
       tokenType: "Bearer",
     });
   } catch (err) {
@@ -326,6 +389,261 @@ export const logout = async (req, res) => {
     await blacklistToken.save();
 
     return res.status(200).json({ success: true, msg: "Logout successfully" });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const createUser = async (req, res) => {
+  const error = validationResult(req);
+  if (!error.isEmpty()) {
+    return res
+      .status(400)
+      .json({ success: false, msg: "Errors ", errors: error.array() });
+  }
+
+  try {
+    const { name, email } = req.body;
+    const isExists = await User.findOne({ email });
+    if (isExists) {
+      return res.status(400).json({ message: "User already exists" });
+    }
+    const password = randomstring.generate(6);
+    console.log("Generated password:", password);
+
+    const hashPassword = await bcrypt.hash(password, 10);
+    const obj = {
+      name,
+      email,
+      password: hashPassword,
+    };
+
+    if (req.body.role && req.body.role === 1) {
+      return res.status(400).json({ message: "You can't create admin user" });
+    } else if (req.body.role) {
+      obj.role = req.body.role;
+    }
+
+    const user = new User(obj);
+    const userData = await user.save();
+
+    // add permission to user
+    if (req.body.permissions !== undefined && req.body.permissions.length > 0) {
+      const Addpermission = req.body.permissions;
+      // console.log("Addpermission", Addpermission);
+
+      const permissionArray = [];
+
+      // Fix: Extract the id from permission object and use the value array
+      await Promise.all(
+        Addpermission.map(async (permission) => {
+          // Extract the permission ID from the object
+          const permissionId = permission.id || permission._id || permission;
+          const permissionValues = permission.value || [];
+
+          const permissionData = await Permission.findOne({
+            _id: permissionId,
+          });
+          // console.log("permissionData", permissionData);
+
+          permissionArray.push({
+            permission_name: permissionData.permission_name,
+            permission_value: permission.value,
+          });
+        })
+      );
+      // console.log("permissionArray", permissionArray);
+
+      if (permissionArray.length > 0) {
+        const UserPermissions = new UserPermission({
+          user_id: userData._id,
+          permission: permissionArray,
+        });
+        await UserPermissions.save();
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      message: "User created successfully",
+      data: userData,
+    });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const getUser = async (req, res) => {
+  console.log("Fetching user data for:", req.user?.user?._id || "Unknown User");
+
+  try {
+    // const userData = await User.find({
+    //   _id: {
+    //     $ne: req.user?.user?._id || req.user?._id, // Exclude the logged-in user
+    //   },
+    // }).lean();
+    // if (!userData) {
+    //   return res.status(404).json({ success: false, msg: "User not found" });
+    // }
+    const user = await User.aggregate([
+      {
+        $match: {
+          _id: {
+            $ne:
+              new mongoose.Types.ObjectId(req.user?.user?._id) ||
+              new mongoose.Types.ObjectId(req.user?._id), // Exclude the logged-in user
+          },
+        },
+      },
+      {
+        $lookup: {
+          from: "userpermissions",
+          localField: "_id",
+          foreignField: "user_id",
+          as: "permissions",
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          name: 1,
+          email: 1,
+          mobile: 1,
+          countryCode: 1,
+          image: 1,
+          is_verified: 1,
+          permissions: {
+            $cond: {
+              if: { $isArray: "$permissions" },
+              then: { $arrayElemAt: ["$permissions", 0] },
+              else: [null],
+            },
+          },
+        },
+      },
+      {
+        $addFields: {
+          permissions: {
+            permission: "$permissions.permission",
+          },
+        },
+      },
+    ]);
+    return res.status(200).json({
+      success: true,
+      msg: "User data fetched successfully",
+      data: user,
+    });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const updateUser = async (req, res) => {
+  const error = validationResult(req);
+  if (!error.isEmpty()) {
+    return res
+      .status(400)
+      .json({ success: false, msg: "Errors ", errors: error.array() });
+  }
+
+  try {
+    const { id, name } = req.body;
+
+    const isExists = await User.findOne({ _id: id });
+    if (!isExists) {
+      return res.status(400).json({ message: "User does not exist" });
+    }
+    var updateObj = {
+      name,
+    };
+
+    if (req.body.role !== undefined) {
+      updateObj.role = req.body.role;
+    }
+
+    const udateduser = await User.findByIdAndUpdate(
+      {
+        _id: id,
+      },
+      {
+        $set: updateObj,
+      },
+      {
+        new: true,
+      }
+    );
+
+    // add permission to user
+    if (req.body.permissions !== undefined && req.body.permissions.length > 0) {
+      const Addpermission = req.body.permissions;
+      // console.log("Addpermission", Addpermission);
+
+      const permissionArray = [];
+
+      // Fix: Extract the id from permission object and use the value array
+      await Promise.all(
+        Addpermission.map(async (permission) => {
+          // Extract the permission ID from the object
+          const permissionId = permission.id || permission._id || permission;
+          const permissionValues = permission.value || [];
+
+          const permissionData = await Permission.findOne({
+            _id: permissionId,
+          });
+          // console.log("permissionData", permissionData);
+
+          permissionArray.push({
+            permission_name: permissionData.permission_name,
+            permission_value: permission.value,
+          });
+        })
+      );
+
+      await UserPermission.findOneAndUpdate(
+        { user_id: udateduser._id },
+        {
+          permission: permissionArray,
+        },
+        { new: true, upsert: true, setDefaultsOnInsert: true } // upsert to create if not exists
+      )
+        .then((updatedPermissions) => {
+          console.log("Permissions updated successfully:", updatedPermissions);
+        })
+        .catch((error) => {
+          console.error("Error updating permissions:", error);
+        });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "User updated successfully",
+      data: udateduser,
+    });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+export const getUserPermission = async (req, res) => {
+  try {
+    const user_Id = req.user?.user?._id || req.user?._id;
+    if (!user_Id) {
+      return res
+        .status(400)
+        .json({ success: false, message: "User ID is required" });
+    }
+    const userPermission = await getUserPermissionHelper(user_Id);
+    if (!userPermission) {
+      return res
+        .status(404)
+        .json({ success: false, message: "User permission not found" });
+    }
+    return res.status(200).json({
+      success: true,
+      message: "User permission fetched successfully",
+      data: userPermission,
+    });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }

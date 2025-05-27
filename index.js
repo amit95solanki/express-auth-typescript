@@ -3,8 +3,11 @@ import mongoose from "mongoose";
 import dotenv from "dotenv";
 import cors from "cors";
 import userRoute from "./routes/userRoute.js";
-import authRoute from "./routes/authRoute.js";
+import adminRoute from "./routes/adminRoute.js";
 import blogRoute from "./routes/blogRoute.js";
+import verifyToken from "./middleware/auth.js";
+import { onlyAdmin } from "./middleware/onlyAdmin.js";
+import { getAllRouter } from "./controllers/routerController.js";
 dotenv.config();
 const app = express();
 
@@ -42,8 +45,9 @@ const connectDb = async () => {
 
 const port = process.env.PORT || 3000;
 app.use("/api", userRoute);
-app.use("/blog", blogRoute);
-app.use("/", authRoute);
+app.use("/api", blogRoute);
+app.use("/", adminRoute);
+app.get("/api/admin/all-router", verifyToken, onlyAdmin, getAllRouter);
 app.listen(port, () => {
   console.log(`Server is running on http://localhost:${port}`);
   connectDb();

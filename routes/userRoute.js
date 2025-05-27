@@ -17,8 +17,10 @@ import {
   updateProfile,
   refreshToken,
   logout,
+  getUserPermission,
 } from "../controllers/userController.js";
 import verifyToken from "../middleware/auth.js";
+
 const router = express.Router();
 router.use(express.json());
 const storage = multer.diskStorage({
@@ -91,4 +93,5 @@ router.post(
 router.get("/refresh-token", verifyToken, wrapHandler(refreshToken));
 
 router.get("/logout", verifyToken, wrapHandler(logout));
+router.get("/refresh-permission", verifyToken, getUserPermission);
 export default router;
